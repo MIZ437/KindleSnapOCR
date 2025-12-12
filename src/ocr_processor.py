@@ -6,6 +6,109 @@ import os
 import sys
 from pathlib import Path
 from typing import List, Optional, Callable
+import numpy as np
+from PIL import Image, ImageFilter, ImageEnhance
+
+
+def preprocess_image(image: Image.Image) -> Image.Image:
+    """
+    OCR精度向上のための画像前処理
+
+    Args:
+        image: PIL Image
+
+    Returns:
+        前処理済みのPIL Image
+    """
+    # 1. グレースケール変換
+    if image.mode != 'L':
+        gray = image.convert('L')
+    else:
+        gray = image
+
+    # 2. コントラスト強調
+    enhancer = ImageEnhance.Contrast(gray)
+    contrast = enhancer.enhance(1.5)
+
+    # 3. シャープネス強調
+    sharpener = ImageEnhance.Sharpness(contrast)
+    sharp = sharpener.enhance(2.0)
+
+    # 4. 適応的二値化（numpy使用）
+    img_array = np.array(sharp)
+
+    # ローカル平均を計算（簡易的な適応的閾値）
+    from scipy import ndimage
+    local_mean = ndimage.uniform_filter(img_array.astype(float), size=25)
+    binary = ((img_array > local_mean - 10) * 255).astype(np.uint8)
+
+    return Image.fromarray(binary)
+
+
+def preprocess_image_simple(image: Image.Image) -> Image.Image:
+    """
+    シンプルな画像前処理（scipy不要版）
+
+    Args:
+        image: PIL Image
+
+    Returns:
+        前処理済みのPIL Image
+    """
+    # 1. グレースケール変換
+    if image.mode != 'L':
+        gray = image.convert('L')
+    else:
+        gray = image
+
+    # 2. コントラスト強調
+    enhancer = ImageEnhance.Contrast(gray)
+    contrast = enhancer.enhance(1.5)
+
+    # 3. シャープネス強調
+    sharpener = ImageEnhance.Sharpness(contrast)
+    sharp = sharpener.enhance(2.0)
+
+    # 4. 大津の二値化
+    img_array = np.array(sharp)
+    threshold = _otsu_threshold(img_array)
+    binary = ((img_array > threshold) * 255).astype(np.uint8)
+
+    return Image.fromarray(binary)
+
+
+def _otsu_threshold(img_array: np.ndarray) -> int:
+    """大津の方法で最適な閾値を計算"""
+    hist, _ = np.histogram(img_array.flatten(), bins=256, range=(0, 256))
+    total = img_array.size
+
+    sum_total = np.sum(np.arange(256) * hist)
+    sum_bg = 0
+    weight_bg = 0
+
+    max_variance = 0
+    threshold = 0
+
+    for i in range(256):
+        weight_bg += hist[i]
+        if weight_bg == 0:
+            continue
+
+        weight_fg = total - weight_bg
+        if weight_fg == 0:
+            break
+
+        sum_bg += i * hist[i]
+        mean_bg = sum_bg / weight_bg
+        mean_fg = (sum_total - sum_bg) / weight_fg
+
+        variance = weight_bg * weight_fg * (mean_bg - mean_fg) ** 2
+
+        if variance > max_variance:
+            max_variance = variance
+            threshold = i
+
+    return threshold
 
 
 def find_tesseract() -> Optional[str]:
@@ -57,13 +160,17 @@ class OCRProcessor:
         """OCRが利用可能かチェック"""
         return self._pytesseract is not None and self.tesseract_path is not None
 
-    def process_image(self, image_path: str) -> str:
+    def process_image(self, image_path: str, use_preprocessing: bool = True) -> str:
         """画像からテキストを抽出"""
         if not self.is_available():
             return ""
 
-        from PIL import Image
         image = Image.open(image_path)
+
+        # 前処理を適用
+        if use_preprocessing:
+            image = preprocess_image_simple(image)
+
         text = self._pytesseract.image_to_string(image, lang=self.language)
         return text
 
@@ -147,6 +254,9 @@ class OCRProcessor:
                 # PIL Imageに変換
                 img_data = pix.tobytes("png")
                 image = Image.open(io.BytesIO(img_data))
+
+                # 前処理を適用
+                image = preprocess_image_simple(image)
 
                 # OCR実行
                 try:
