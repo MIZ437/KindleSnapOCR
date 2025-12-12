@@ -98,6 +98,9 @@ class MainWindow:
         self.detect_combo = ttk.Combobox(param_frame, textvariable=self.auto_detect_count,
                                           values=[str(i) for i in range(5, 21)], width=5, state='readonly')
         self.detect_combo.pack(side=tk.LEFT, padx=(5, 0))
+        self.detect_desc_label = ttk.Label(param_frame, text=f"(同じ画像が連続{self.auto_detect_count.get()}回で停止)", foreground="gray")
+        self.detect_desc_label.pack(side=tk.LEFT, padx=(5, 0))
+        self.detect_combo.bind('<<ComboboxSelected>>', self._update_detect_desc)
 
         ttk.Label(param_frame, text="総ページ数:").pack(side=tk.LEFT, padx=(20, 0))
         self.pages_entry = ttk.Entry(param_frame, textvariable=self.total_pages, width=10)
@@ -250,6 +253,10 @@ class MainWindow:
             self.pages_entry.config(state='normal')
         else:
             self.pages_entry.config(state='disabled')
+
+    def _update_detect_desc(self, event=None):
+        n = self.auto_detect_count.get()
+        self.detect_desc_label.config(text=f"(同じ画像が連続{n}回で停止)")
 
     def _browse_output(self):
         folder = filedialog.askdirectory(initialdir=self.output_folder.get())
