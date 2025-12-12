@@ -120,15 +120,22 @@ class MainWindow:
         ocr_frame = ttk.LabelFrame(main_frame, text="OCR設定", padding="10")
         ocr_frame.pack(fill=tk.X, pady=(0, 10))
 
-        self.ocr_check = ttk.Checkbutton(ocr_frame, text="OCR処理を行う", variable=self.enable_ocr)
+        ocr_row1 = ttk.Frame(ocr_frame)
+        ocr_row1.pack(fill=tk.X)
+
+        self.ocr_check = ttk.Checkbutton(ocr_row1, text="OCR処理を行う", variable=self.enable_ocr)
         self.ocr_check.pack(side=tk.LEFT)
 
-        ttk.Label(ocr_frame, text="言語:").pack(side=tk.LEFT, padx=(20, 0))
-        ocr_combo = ttk.Combobox(ocr_frame, textvariable=self.ocr_language, values=['jpn', 'eng', 'jpn+eng'], width=10, state='readonly')
+        ttk.Label(ocr_row1, text="言語:").pack(side=tk.LEFT, padx=(20, 0))
+        ocr_combo = ttk.Combobox(ocr_row1, textvariable=self.ocr_language, values=['jpn', 'eng', 'jpn+eng'], width=10, state='readonly')
         ocr_combo.pack(side=tk.LEFT, padx=(5, 0))
 
-        self.ocr_status_label = ttk.Label(ocr_frame, text="")
+        self.ocr_status_label = ttk.Label(ocr_row1, text="")
         self.ocr_status_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        self.install_tesseract_btn = ttk.Button(ocr_row1, text="Tesseractをインストール", command=self._install_tesseract)
+        self.install_tesseract_btn.pack(side=tk.LEFT, padx=(10, 0))
+        self.install_tesseract_btn.pack_forget()  # 初期状態では非表示
 
         # === 出力設定 ===
         output_frame = ttk.LabelFrame(main_frame, text="出力設定", padding="10")
@@ -181,10 +188,62 @@ class MainWindow:
         tesseract_path = find_tesseract()
         if tesseract_path:
             self.ocr_status_label.config(text="(Tesseract検出済)", foreground="green")
+            self.ocr_check.config(state='normal')
+            self.install_tesseract_btn.pack_forget()
         else:
-            self.ocr_status_label.config(text="(Tesseract未検出 - PDF出力のみ)", foreground="orange")
+            self.ocr_status_label.config(text="(Tesseract未検出)", foreground="orange")
             self.enable_ocr.set(False)
             self.ocr_check.config(state='disabled')
+            self.install_tesseract_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+    def _install_tesseract(self):
+        """Tesseractをインストール"""
+        from .tesseract_installer import is_tesseract_installed, download_and_install_tesseract
+
+        if is_tesseract_installed():
+            messagebox.showinfo("情報", "Tesseractは既にインストールされています")
+            self._check_ocr()
+            return
+
+        result = messagebox.askyesno(
+            "Tesseract OCRのインストール",
+            "Tesseract OCRをダウンロードしてインストールします。\n\n"
+            "・ダウンロードサイズ: 約70MB\n"
+            "・管理者権限が必要な場合があります\n\n"
+            "インストールしますか？"
+        )
+
+        if not result:
+            return
+
+        # インストールボタンを無効化
+        self.install_tesseract_btn.config(state='disabled', text="インストール中...")
+
+        def do_install():
+            def progress_callback(status, current, total):
+                self.root.after(0, lambda: self.ocr_status_label.config(text=f"({status})"))
+
+            success = download_and_install_tesseract(progress_callback)
+
+            def on_complete():
+                self.install_tesseract_btn.config(state='normal', text="Tesseractをインストール")
+                if success:
+                    messagebox.showinfo("完了", "Tesseract OCRのインストールが完了しました")
+                    self._check_ocr()
+                else:
+                    messagebox.showerror(
+                        "エラー",
+                        "インストールに失敗しました。\n\n"
+                        "手動でインストールしてください:\n"
+                        "https://github.com/UB-Mannheim/tesseract/wiki"
+                    )
+                    self._check_ocr()
+
+            self.root.after(0, on_complete)
+
+        import threading
+        thread = threading.Thread(target=do_install, daemon=True)
+        thread.start()
 
     def _toggle_page_input(self):
         if self.stop_mode.get() == 'pages':
