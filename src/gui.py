@@ -403,40 +403,14 @@ class MainWindow:
 
             stop_mode = self.stop_mode.get()
 
-            # プライバシーモード用コールバック（スレッドセーフ・高速版）
-            hide_done = threading.Event()
-            show_done = threading.Event()
-
+            # プライバシーモード用コールバック（高速版・画面外移動方式）
             def on_before_capture():
-                if self.privacy_controller and self.privacy_controller.overlay:
-                    hide_done.clear()
-                    def _hide():
-                        try:
-                            if self.privacy_controller and self.privacy_controller.overlay:
-                                # 透明度を0にして瞬時に非表示（withdrawより高速）
-                                self.privacy_controller.overlay.overlay.attributes('-alpha', 0)
-                                self.privacy_controller.overlay.overlay.update_idletasks()
-                        except:
-                            pass
-                        hide_done.set()
-                    self.root.after(0, _hide)
-                    hide_done.wait(timeout=0.5)
-                    time.sleep(0.02)  # 最小限の待機
+                if self.privacy_controller:
+                    self.privacy_controller.hide_for_capture()
 
             def on_after_capture():
-                if self.privacy_controller and self.privacy_controller.overlay:
-                    show_done.clear()
-                    def _show():
-                        try:
-                            if self.privacy_controller and self.privacy_controller.overlay:
-                                # 透明度を戻す
-                                self.privacy_controller.overlay.overlay.attributes('-alpha', 0.95)
-                                self.privacy_controller.overlay.overlay.update_idletasks()
-                        except:
-                            pass
-                        show_done.set()
-                    self.root.after(0, _show)
-                    show_done.wait(timeout=0.5)
+                if self.privacy_controller:
+                    self.privacy_controller.show_after_capture()
 
             if stop_mode == 'pages':
                 total = int(self.total_pages.get())
