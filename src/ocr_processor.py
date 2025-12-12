@@ -105,3 +105,85 @@ class OCRProcessor:
                 if idx > 0:
                     f.write(page_separator.format(page=idx + 1))
                 f.write(text)
+
+    def process_pdf(
+        self,
+        pdf_path: str,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        dpi: int = 200
+    ) -> List[str]:
+        """
+        PDFファイルからテキストを抽出
+
+        Args:
+            pdf_path: PDFファイルパス
+            progress_callback: (current, total, status) コールバック
+            dpi: 画像変換時の解像度
+
+        Returns:
+            各ページのOCRテキストのリスト
+        """
+        if not self.is_available():
+            return []
+
+        import fitz  # PyMuPDF
+        from PIL import Image
+        import io
+
+        results = []
+        doc = fitz.open(pdf_path)
+        total = len(doc)
+
+        try:
+            for page_num in range(total):
+                if progress_callback:
+                    progress_callback(page_num + 1, total, f"OCR処理中: {page_num + 1}/{total}ページ")
+
+                page = doc[page_num]
+                # ページを画像に変換
+                mat = fitz.Matrix(dpi / 72, dpi / 72)
+                pix = page.get_pixmap(matrix=mat)
+
+                # PIL Imageに変換
+                img_data = pix.tobytes("png")
+                image = Image.open(io.BytesIO(img_data))
+
+                # OCR実行
+                try:
+                    text = self._pytesseract.image_to_string(image, lang=self.language)
+                    results.append(text)
+                except Exception as e:
+                    results.append(f"[OCR Error on page {page_num + 1}: {str(e)}]")
+
+        finally:
+            doc.close()
+
+        return results
+
+    def process_pdf_to_file(
+        self,
+        pdf_path: str,
+        output_path: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        dpi: int = 200
+    ) -> str:
+        """
+        PDFファイルをOCR処理してテキストファイルに保存
+
+        Args:
+            pdf_path: PDFファイルパス
+            output_path: 出力テキストファイルパス（省略時はPDFと同じ場所に_ocr.txt）
+            progress_callback: (current, total, status) コールバック
+            dpi: 画像変換時の解像度
+
+        Returns:
+            出力ファイルパス
+        """
+        if output_path is None:
+            base = os.path.splitext(pdf_path)[0]
+            output_path = f"{base}_ocr.txt"
+
+        results = self.process_pdf(pdf_path, progress_callback, dpi)
+        self.save_ocr_results(results, output_path)
+
+        return output_path

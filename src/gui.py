@@ -140,6 +140,16 @@ class MainWindow:
         self.install_tesseract_btn.pack(side=tk.LEFT, padx=(10, 0))
         self.install_tesseract_btn.pack_forget()  # 初期状態では非表示
 
+        # PDFからOCR処理
+        ocr_row2 = ttk.Frame(ocr_frame)
+        ocr_row2.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Label(ocr_row2, text="既存PDFのOCR:").pack(side=tk.LEFT)
+        self.pdf_ocr_btn = ttk.Button(ocr_row2, text="PDFを選択してOCR実行", command=self._ocr_existing_pdf)
+        self.pdf_ocr_btn.pack(side=tk.LEFT, padx=(10, 0))
+        self.pdf_ocr_status = ttk.Label(ocr_row2, text="")
+        self.pdf_ocr_status.pack(side=tk.LEFT, padx=(10, 0))
+
         # === 出力設定 ===
         output_frame = ttk.LabelFrame(main_frame, text="出力設定", padding="10")
         output_frame.pack(fill=tk.X, pady=(0, 10))
@@ -246,6 +256,70 @@ class MainWindow:
 
         import threading
         thread = threading.Thread(target=do_install, daemon=True)
+        thread.start()
+
+    def _ocr_existing_pdf(self):
+        """既存PDFにOCR処理を実行"""
+        from .ocr_processor import OCRProcessor, find_tesseract
+
+        # Tesseractチェック
+        if not find_tesseract():
+            messagebox.showerror("エラー", "Tesseract OCRがインストールされていません。\n先にTesseractをインストールしてください。")
+            return
+
+        # PDFファイル選択
+        pdf_path = filedialog.askopenfilename(
+            title="OCR処理するPDFを選択",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            initialdir=self.output_folder.get()
+        )
+
+        if not pdf_path:
+            return
+
+        # 確認
+        result = messagebox.askyesno(
+            "確認",
+            f"選択したPDFにOCR処理を実行します。\n\n"
+            f"ファイル: {os.path.basename(pdf_path)}\n"
+            f"言語: {self.ocr_language.get()}\n\n"
+            f"処理を開始しますか？"
+        )
+
+        if not result:
+            return
+
+        # ボタン無効化
+        self.pdf_ocr_btn.config(state='disabled')
+        self.pdf_ocr_status.config(text="処理中...", foreground="blue")
+
+        def do_ocr():
+            try:
+                ocr = OCRProcessor(self.ocr_language.get())
+
+                def progress_callback(current, total, status):
+                    self.root.after(0, lambda: self.pdf_ocr_status.config(text=f"{current}/{total}ページ"))
+
+                output_path = ocr.process_pdf_to_file(pdf_path, progress_callback=progress_callback)
+
+                def on_complete():
+                    self.pdf_ocr_btn.config(state='normal')
+                    self.pdf_ocr_status.config(text="完了", foreground="green")
+                    self._log(f"PDF OCR完了: {output_path}")
+                    messagebox.showinfo("完了", f"OCR処理が完了しました。\n\n出力ファイル:\n{output_path}")
+
+                self.root.after(0, on_complete)
+
+            except Exception as e:
+                def on_error():
+                    self.pdf_ocr_btn.config(state='normal')
+                    self.pdf_ocr_status.config(text="エラー", foreground="red")
+                    self._log(f"PDF OCRエラー: {str(e)}")
+                    messagebox.showerror("エラー", f"OCR処理中にエラーが発生しました:\n{str(e)}")
+
+                self.root.after(0, on_error)
+
+        thread = threading.Thread(target=do_ocr, daemon=True)
         thread.start()
 
     def _toggle_page_input(self):
