@@ -24,7 +24,7 @@ class MainWindow:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("KindleSnapOCR - Kindle本PDF化ツール")
-        self.root.geometry("600x700")
+        self.root.geometry("650x800")
         self.root.resizable(True, True)
 
         # 状態変数
@@ -45,6 +45,11 @@ class MainWindow:
         self.enable_ocr = tk.BooleanVar(value=True)
         self.privacy_mode = tk.BooleanVar(value=False)
         self.privacy_controller = None
+
+        # OCR詳細設定
+        self.ocr_engine = tk.StringVar(value='tesseract')
+        self.text_direction = tk.StringVar(value='horizontal')
+        self.preprocessing_level = tk.StringVar(value='advanced')
 
         self._setup_ui()
         self._set_default_output()
@@ -120,18 +125,31 @@ class MainWindow:
         ttk.Checkbutton(privacy_frame, text="プライバシーモード (キャプチャ領域を黒で隠す)", variable=self.privacy_mode).pack(side=tk.LEFT)
 
         # === OCR設定 ===
-        ocr_frame = ttk.LabelFrame(main_frame, text="OCR設定", padding="10")
+        ocr_frame = ttk.LabelFrame(main_frame, text="OCR設定（文字認識）", padding="10")
         ocr_frame.pack(fill=tk.X, pady=(0, 10))
 
+        # 表示名と内部値のマッピング
+        self._engine_map = {
+            'Tesseract（軽量・汎用）': 'tesseract',
+            'manga-ocr（高精度・日本語特化）': 'manga_ocr'
+        }
+        self._direction_map = {
+            '横書き': 'horizontal',
+            '縦書き': 'vertical',
+            '自動判定': 'mixed'
+        }
+        self._preproc_map = {
+            'なし': 'none',
+            '標準': 'simple',
+            '高精度（推奨）': 'advanced'
+        }
+
+        # OCR有効化とステータス
         ocr_row1 = ttk.Frame(ocr_frame)
         ocr_row1.pack(fill=tk.X)
 
-        self.ocr_check = ttk.Checkbutton(ocr_row1, text="OCR処理を行う", variable=self.enable_ocr)
+        self.ocr_check = ttk.Checkbutton(ocr_row1, text="OCR処理を行う（PDFからテキストを抽出）", variable=self.enable_ocr)
         self.ocr_check.pack(side=tk.LEFT)
-
-        ttk.Label(ocr_row1, text="言語:").pack(side=tk.LEFT, padx=(20, 0))
-        ocr_combo = ttk.Combobox(ocr_row1, textvariable=self.ocr_language, values=['jpn', 'eng', 'jpn+eng'], width=10, state='readonly')
-        ocr_combo.pack(side=tk.LEFT, padx=(5, 0))
 
         self.ocr_status_label = ttk.Label(ocr_row1, text="")
         self.ocr_status_label.pack(side=tk.LEFT, padx=(10, 0))
@@ -140,15 +158,77 @@ class MainWindow:
         self.install_tesseract_btn.pack(side=tk.LEFT, padx=(10, 0))
         self.install_tesseract_btn.pack_forget()  # 初期状態では非表示
 
-        # PDFからOCR処理
+        # OCRエンジン選択
         ocr_row2 = ttk.Frame(ocr_frame)
         ocr_row2.pack(fill=tk.X, pady=(10, 0))
 
-        ttk.Label(ocr_row2, text="既存PDFのOCR:").pack(side=tk.LEFT)
-        self.pdf_ocr_btn = ttk.Button(ocr_row2, text="PDFを選択してOCR実行", command=self._ocr_existing_pdf)
-        self.pdf_ocr_btn.pack(side=tk.LEFT, padx=(10, 0))
-        self.pdf_ocr_status = ttk.Label(ocr_row2, text="")
+        ttk.Label(ocr_row2, text="認識エンジン:").pack(side=tk.LEFT)
+        self._engine_display = tk.StringVar(value='Tesseract（軽量・汎用）')
+        self.engine_combo = ttk.Combobox(ocr_row2, textvariable=self._engine_display,
+                                          values=list(self._engine_map.keys()), width=28, state='readonly')
+        self.engine_combo.pack(side=tk.LEFT, padx=(5, 0))
+        self.engine_combo.bind('<<ComboboxSelected>>', self._on_engine_change)
+
+        self.engine_status_label = ttk.Label(ocr_row2, text="", foreground="gray")
+        self.engine_status_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        self.install_manga_ocr_btn = ttk.Button(ocr_row2, text="インストール", command=self._install_manga_ocr)
+        self.install_manga_ocr_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self.install_manga_ocr_btn.pack_forget()
+
+        # テキスト方向と前処理
+        ocr_row3 = ttk.Frame(ocr_frame)
+        ocr_row3.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Label(ocr_row3, text="本の種類:").pack(side=tk.LEFT)
+        self._direction_display = tk.StringVar(value='横書き')
+        self.direction_combo = ttk.Combobox(ocr_row3, textvariable=self._direction_display,
+                                             values=list(self._direction_map.keys()), width=10, state='readonly')
+        self.direction_combo.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Label(ocr_row3, text="精度:").pack(side=tk.LEFT, padx=(15, 0))
+        self._preproc_display = tk.StringVar(value='高精度（推奨）')
+        self.preproc_combo = ttk.Combobox(ocr_row3, textvariable=self._preproc_display,
+                                           values=list(self._preproc_map.keys()), width=14, state='readonly')
+        self.preproc_combo.pack(side=tk.LEFT, padx=(5, 0))
+
+        # === テキスト抽出（OCR不要） ===
+        extract_frame = ttk.LabelFrame(main_frame, text="テキスト抽出（PDF・Wordから直接抽出、高速・高精度）", padding="10")
+        extract_frame.pack(fill=tk.X, pady=(0, 10))
+
+        extract_row1 = ttk.Frame(extract_frame)
+        extract_row1.pack(fill=tk.X)
+
+        self.extract_pdf_btn = ttk.Button(extract_row1, text="PDFからテキスト抽出", command=self._extract_pdf_text)
+        self.extract_pdf_btn.pack(side=tk.LEFT)
+
+        self.extract_word_btn = ttk.Button(extract_row1, text="Wordからテキスト抽出", command=self._extract_word_text)
+        self.extract_word_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        self.extract_status = ttk.Label(extract_row1, text="")
+        self.extract_status.pack(side=tk.LEFT, padx=(10, 0))
+
+        extract_desc = ttk.Label(extract_frame, text="※ テキスト付きPDF・Word文書から直接抽出（OCRより高速・正確）", foreground="gray")
+        extract_desc.pack(anchor=tk.W, pady=(5, 0))
+
+        # === 既存PDF/画像のOCR ===
+        pdf_ocr_frame = ttk.LabelFrame(main_frame, text="OCR（スキャン画像・写真から文字認識）", padding="10")
+        pdf_ocr_frame.pack(fill=tk.X, pady=(0, 10))
+
+        pdf_ocr_row1 = ttk.Frame(pdf_ocr_frame)
+        pdf_ocr_row1.pack(fill=tk.X)
+
+        self.pdf_ocr_btn = ttk.Button(pdf_ocr_row1, text="スキャンPDFをOCR", command=self._ocr_existing_pdf)
+        self.pdf_ocr_btn.pack(side=tk.LEFT)
+
+        self.image_ocr_btn = ttk.Button(pdf_ocr_row1, text="画像をOCR", command=self._ocr_existing_images)
+        self.image_ocr_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        self.pdf_ocr_status = ttk.Label(pdf_ocr_row1, text="")
         self.pdf_ocr_status.pack(side=tk.LEFT, padx=(10, 0))
+
+        pdf_ocr_desc = ttk.Label(pdf_ocr_frame, text="※ スキャンしたPDFや写真から文字を読み取ります（時間がかかります）", foreground="gray")
+        pdf_ocr_desc.pack(anchor=tk.W, pady=(5, 0))
 
         # === 出力設定 ===
         output_frame = ttk.LabelFrame(main_frame, text="出力設定", padding="10")
@@ -197,7 +277,10 @@ class MainWindow:
         self.output_folder.set(default_path)
 
     def _check_ocr(self):
-        from .ocr_processor import find_tesseract
+        """OCRエンジンの状態をチェック"""
+        from .ocr_processor import find_tesseract, check_manga_ocr_available
+
+        # Tesseractチェック
         tesseract_path = find_tesseract()
         if tesseract_path:
             self.ocr_status_label.config(text="(Tesseract検出済)", foreground="green")
@@ -208,6 +291,53 @@ class MainWindow:
             self.enable_ocr.set(False)
             self.ocr_check.config(state='disabled')
             self.install_tesseract_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        # manga-ocrチェック
+        self._update_manga_ocr_status()
+
+    def _get_engine_value(self) -> str:
+        """表示名から内部値を取得"""
+        return self._engine_map.get(self._engine_display.get(), 'tesseract')
+
+    def _get_direction_value(self) -> str:
+        """表示名から内部値を取得"""
+        return self._direction_map.get(self._direction_display.get(), 'horizontal')
+
+    def _get_preproc_value(self) -> str:
+        """表示名から内部値を取得"""
+        return self._preproc_map.get(self._preproc_display.get(), 'advanced')
+
+    def _update_manga_ocr_status(self):
+        """manga-ocrの状態を更新"""
+        from .ocr_processor import check_manga_ocr_available
+
+        if check_manga_ocr_available():
+            self.engine_status_label.config(text="利用可能", foreground="green")
+            self.install_manga_ocr_btn.pack_forget()
+        else:
+            engine = self._get_engine_value()
+            if engine == 'manga_ocr':
+                self.engine_status_label.config(text="未インストール", foreground="orange")
+                self.install_manga_ocr_btn.pack(side=tk.LEFT, padx=(5, 0))
+            else:
+                self.engine_status_label.config(text="")
+                self.install_manga_ocr_btn.pack_forget()
+
+    def _on_engine_change(self, event=None):
+        """OCRエンジン変更時の処理"""
+        engine = self._get_engine_value()
+
+        if engine == 'manga_ocr':
+            # manga-ocrは前処理不要、テキスト方向自動
+            self.preproc_combo.config(state='disabled')
+            self.direction_combo.config(state='disabled')
+            self._preproc_display.set('なし')
+            self._direction_display.set('自動判定')
+        else:
+            self.preproc_combo.config(state='readonly')
+            self.direction_combo.config(state='readonly')
+
+        self._update_manga_ocr_status()
 
     def _install_tesseract(self):
         """Tesseractをインストール"""
@@ -258,13 +388,291 @@ class MainWindow:
         thread = threading.Thread(target=do_install, daemon=True)
         thread.start()
 
+    def _install_manga_ocr(self):
+        """manga-ocrをインストール"""
+        result = messagebox.askyesno(
+            "manga-ocrのインストール",
+            "manga-ocrをインストールします。\n\n"
+            "・ダウンロードサイズ: 約2GB（PyTorch含む）\n"
+            "・初回実行時にモデル（約400MB）もダウンロードされます\n"
+            "・メモリ8GB以上推奨\n\n"
+            "インストールしますか？\n"
+            "（コマンドプロンプトが開きます）"
+        )
+
+        if not result:
+            return
+
+        # pipでインストール
+        self.install_manga_ocr_btn.config(state='disabled', text="インストール中...")
+        self._log("manga-ocrをインストール中... (数分かかります)")
+
+        def do_install():
+            import subprocess
+            try:
+                # pipでmanga-ocrをインストール
+                result = subprocess.run(
+                    [sys.executable, '-m', 'pip', 'install', 'manga-ocr'],
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10分タイムアウト
+                )
+
+                def on_complete():
+                    self.install_manga_ocr_btn.config(state='normal', text="manga-ocrをインストール")
+                    if result.returncode == 0:
+                        self._log("manga-ocrのインストールが完了しました")
+                        messagebox.showinfo("完了", "manga-ocrのインストールが完了しました。\n\n初回実行時にモデルがダウンロードされます。")
+                        self._update_manga_ocr_status()
+                    else:
+                        self._log(f"インストールエラー: {result.stderr}")
+                        messagebox.showerror("エラー", f"インストールに失敗しました:\n{result.stderr[:500]}")
+
+                self.root.after(0, on_complete)
+
+            except subprocess.TimeoutExpired:
+                def on_timeout():
+                    self.install_manga_ocr_btn.config(state='normal', text="manga-ocrをインストール")
+                    self._log("インストールがタイムアウトしました")
+                    messagebox.showerror("エラー", "インストールがタイムアウトしました。\n手動でインストールしてください:\npip install manga-ocr")
+                self.root.after(0, on_timeout)
+
+            except Exception as e:
+                def on_error():
+                    self.install_manga_ocr_btn.config(state='normal', text="manga-ocrをインストール")
+                    self._log(f"インストールエラー: {str(e)}")
+                    messagebox.showerror("エラー", f"インストールに失敗しました:\n{str(e)}")
+                self.root.after(0, on_error)
+
+        thread = threading.Thread(target=do_install, daemon=True)
+        thread.start()
+
+    def _extract_pdf_text(self):
+        """PDFからテキストを直接抽出"""
+        from .text_extractor import TextExtractor
+
+        # PDFファイル選択
+        pdf_path = filedialog.askopenfilename(
+            title="テキストを抽出するPDFを選択",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            initialdir=self.output_folder.get()
+        )
+
+        if not pdf_path:
+            return
+
+        # テキストが含まれているかチェック
+        extractor = TextExtractor()
+        has_text = extractor.has_text_content(pdf_path)
+
+        if not has_text:
+            result = messagebox.askyesno(
+                "確認",
+                "このPDFにはテキストが含まれていない可能性があります。\n"
+                "（スキャンされた画像のみのPDFかもしれません）\n\n"
+                "テキスト抽出を試みますか？\n"
+                "（テキストが抽出できない場合は、OCR機能をお試しください）"
+            )
+            if not result:
+                return
+
+        # ボタン無効化
+        self.extract_pdf_btn.config(state='disabled')
+        self.extract_word_btn.config(state='disabled')
+        self.extract_status.config(text="抽出中...", foreground="blue")
+
+        def do_extract():
+            try:
+                def progress_callback(current, total, status):
+                    self.root.after(0, lambda: self.extract_status.config(text=f"{current}/{total}ページ"))
+
+                output_path = extractor.extract_to_file(pdf_path, progress_callback=progress_callback)
+
+                def on_complete():
+                    self.extract_pdf_btn.config(state='normal')
+                    self.extract_word_btn.config(state='normal')
+                    self.extract_status.config(text="完了!", foreground="green")
+                    self._log(f"PDFテキスト抽出完了: {output_path}")
+                    messagebox.showinfo("完了", f"テキスト抽出が完了しました。\n\n出力ファイル:\n{output_path}")
+
+                self.root.after(0, on_complete)
+
+            except Exception as e:
+                def on_error():
+                    self.extract_pdf_btn.config(state='normal')
+                    self.extract_word_btn.config(state='normal')
+                    self.extract_status.config(text="エラー", foreground="red")
+                    self._log(f"PDFテキスト抽出エラー: {str(e)}")
+                    messagebox.showerror("エラー", f"テキスト抽出中にエラーが発生しました:\n{str(e)}")
+
+                self.root.after(0, on_error)
+
+        thread = threading.Thread(target=do_extract, daemon=True)
+        thread.start()
+
+    def _extract_word_text(self):
+        """Wordファイルからテキストを直接抽出"""
+        from .text_extractor import TextExtractor, check_docx_available
+
+        if not check_docx_available():
+            result = messagebox.askyesno(
+                "python-docxが必要",
+                "Word文書の読み取りにはpython-docxが必要です。\n\n"
+                "インストールしますか？"
+            )
+            if result:
+                self._install_python_docx()
+            return
+
+        # Wordファイル選択
+        word_path = filedialog.askopenfilename(
+            title="テキストを抽出するWordファイルを選択",
+            filetypes=[
+                ("Word files", "*.docx"),
+                ("All files", "*.*")
+            ],
+            initialdir=self.output_folder.get()
+        )
+
+        if not word_path:
+            return
+
+        # .doc形式のチェック
+        if word_path.lower().endswith('.doc') and not word_path.lower().endswith('.docx'):
+            messagebox.showerror(
+                "非対応形式",
+                ".doc形式は直接サポートされていません。\n\n"
+                "Wordで開いて「名前を付けて保存」→「.docx」形式で保存してから使用してください。"
+            )
+            return
+
+        # ボタン無効化
+        self.extract_pdf_btn.config(state='disabled')
+        self.extract_word_btn.config(state='disabled')
+        self.extract_status.config(text="抽出中...", foreground="blue")
+
+        def do_extract():
+            try:
+                extractor = TextExtractor()
+
+                def progress_callback(current, total, status):
+                    self.root.after(0, lambda: self.extract_status.config(text=status))
+
+                output_path = extractor.extract_to_file(word_path, progress_callback=progress_callback)
+
+                def on_complete():
+                    self.extract_pdf_btn.config(state='normal')
+                    self.extract_word_btn.config(state='normal')
+                    self.extract_status.config(text="完了!", foreground="green")
+                    self._log(f"Wordテキスト抽出完了: {output_path}")
+                    messagebox.showinfo("完了", f"テキスト抽出が完了しました。\n\n出力ファイル:\n{output_path}")
+
+                self.root.after(0, on_complete)
+
+            except Exception as e:
+                def on_error():
+                    self.extract_pdf_btn.config(state='normal')
+                    self.extract_word_btn.config(state='normal')
+                    self.extract_status.config(text="エラー", foreground="red")
+                    self._log(f"Wordテキスト抽出エラー: {str(e)}")
+                    messagebox.showerror("エラー", f"テキスト抽出中にエラーが発生しました:\n{str(e)}")
+
+                self.root.after(0, on_error)
+
+        thread = threading.Thread(target=do_extract, daemon=True)
+        thread.start()
+
+    def _install_python_docx(self):
+        """python-docxをインストール"""
+        self.extract_word_btn.config(state='disabled')
+        self.extract_status.config(text="インストール中...", foreground="blue")
+        self._log("python-docxをインストール中...")
+
+        def do_install():
+            import subprocess
+            try:
+                result = subprocess.run(
+                    [sys.executable, '-m', 'pip', 'install', 'python-docx'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+
+                def on_complete():
+                    self.extract_word_btn.config(state='normal')
+                    if result.returncode == 0:
+                        self.extract_status.config(text="インストール完了", foreground="green")
+                        self._log("python-docxのインストールが完了しました")
+                        messagebox.showinfo("完了", "python-docxのインストールが完了しました。\n\nもう一度「Wordからテキスト抽出」をクリックしてください。")
+                    else:
+                        self.extract_status.config(text="エラー", foreground="red")
+                        self._log(f"インストールエラー: {result.stderr}")
+                        messagebox.showerror("エラー", f"インストールに失敗しました:\n{result.stderr[:300]}")
+
+                self.root.after(0, on_complete)
+
+            except Exception as e:
+                def on_error():
+                    self.extract_word_btn.config(state='normal')
+                    self.extract_status.config(text="エラー", foreground="red")
+                    self._log(f"インストールエラー: {str(e)}")
+                    messagebox.showerror("エラー", f"インストールに失敗しました:\n{str(e)}")
+
+                self.root.after(0, on_error)
+
+        thread = threading.Thread(target=do_install, daemon=True)
+        thread.start()
+
+    def _create_ocr_processor(self):
+        """OCRプロセッサを作成"""
+        from .ocr_processor import OCRProcessor, OCREngine, TextDirection, PreprocessingLevel
+
+        engine = self._get_engine_value()
+        ocr_engine = OCREngine.MANGA_OCR if engine == 'manga_ocr' else OCREngine.TESSERACT
+
+        direction_map = {
+            'horizontal': TextDirection.HORIZONTAL,
+            'vertical': TextDirection.VERTICAL,
+            'mixed': TextDirection.MIXED
+        }
+        text_dir = direction_map.get(self._get_direction_value(), TextDirection.HORIZONTAL)
+
+        preproc_map = {
+            'none': PreprocessingLevel.NONE,
+            'simple': PreprocessingLevel.SIMPLE,
+            'advanced': PreprocessingLevel.ADVANCED
+        }
+        preproc = preproc_map.get(self._get_preproc_value(), PreprocessingLevel.ADVANCED)
+
+        # 言語設定（テキスト方向に応じて自動設定）
+        direction = self._get_direction_value()
+        if direction == 'vertical':
+            language = 'jpn_vert'
+        elif direction == 'mixed':
+            language = 'jpn+jpn_vert'
+        else:
+            language = 'jpn'
+
+        return OCRProcessor(
+            language=language,
+            engine=ocr_engine,
+            text_direction=text_dir,
+            preprocessing=preproc
+        )
+
     def _ocr_existing_pdf(self):
         """既存PDFにOCR処理を実行"""
-        from .ocr_processor import OCRProcessor, find_tesseract
+        from .ocr_processor import find_tesseract, check_manga_ocr_available
 
-        # Tesseractチェック
-        if not find_tesseract():
+        engine = self._get_engine_value()
+
+        # エンジンの可用性チェック
+        if engine == 'tesseract' and not find_tesseract():
             messagebox.showerror("エラー", "Tesseract OCRがインストールされていません。\n先にTesseractをインストールしてください。")
+            return
+
+        if engine == 'manga_ocr' and not check_manga_ocr_available():
+            messagebox.showerror("エラー", "manga-ocrがインストールされていません。\n先にmanga-ocrをインストールしてください。")
             return
 
         # PDFファイル選択
@@ -278,11 +686,14 @@ class MainWindow:
             return
 
         # 確認
+        engine_name = "manga-ocr（高精度）" if engine == 'manga_ocr' else "Tesseract"
+        direction_name = self._direction_display.get()
         result = messagebox.askyesno(
             "確認",
             f"選択したPDFにOCR処理を実行します。\n\n"
             f"ファイル: {os.path.basename(pdf_path)}\n"
-            f"言語: {self.ocr_language.get()}\n\n"
+            f"エンジン: {engine_name}\n"
+            f"本の種類: {direction_name}\n\n"
             f"処理を開始しますか？"
         )
 
@@ -291,11 +702,12 @@ class MainWindow:
 
         # ボタン無効化
         self.pdf_ocr_btn.config(state='disabled')
+        self.image_ocr_btn.config(state='disabled')
         self.pdf_ocr_status.config(text="処理中...", foreground="blue")
 
         def do_ocr():
             try:
-                ocr = OCRProcessor(self.ocr_language.get())
+                ocr = self._create_ocr_processor()
 
                 def progress_callback(current, total, status):
                     self.root.after(0, lambda: self.pdf_ocr_status.config(text=f"{current}/{total}ページ"))
@@ -304,7 +716,8 @@ class MainWindow:
 
                 def on_complete():
                     self.pdf_ocr_btn.config(state='normal')
-                    self.pdf_ocr_status.config(text="完了", foreground="green")
+                    self.image_ocr_btn.config(state='normal')
+                    self.pdf_ocr_status.config(text="完了!", foreground="green")
                     self._log(f"PDF OCR完了: {output_path}")
                     messagebox.showinfo("完了", f"OCR処理が完了しました。\n\n出力ファイル:\n{output_path}")
 
@@ -313,8 +726,100 @@ class MainWindow:
             except Exception as e:
                 def on_error():
                     self.pdf_ocr_btn.config(state='normal')
+                    self.image_ocr_btn.config(state='normal')
                     self.pdf_ocr_status.config(text="エラー", foreground="red")
                     self._log(f"PDF OCRエラー: {str(e)}")
+                    messagebox.showerror("エラー", f"OCR処理中にエラーが発生しました:\n{str(e)}")
+
+                self.root.after(0, on_error)
+
+        thread = threading.Thread(target=do_ocr, daemon=True)
+        thread.start()
+
+    def _ocr_existing_images(self):
+        """既存の画像にOCR処理を実行"""
+        from .ocr_processor import find_tesseract, check_manga_ocr_available
+
+        engine = self._get_engine_value()
+
+        # エンジンの可用性チェック
+        if engine == 'tesseract' and not find_tesseract():
+            messagebox.showerror("エラー", "Tesseract OCRがインストールされていません。\n先にTesseractをインストールしてください。")
+            return
+
+        if engine == 'manga_ocr' and not check_manga_ocr_available():
+            messagebox.showerror("エラー", "manga-ocrがインストールされていません。\n先にmanga-ocrをインストールしてください。")
+            return
+
+        # 画像ファイル選択（複数選択可能）
+        image_paths = filedialog.askopenfilenames(
+            title="OCR処理する画像を選択（複数選択可）",
+            filetypes=[
+                ("画像ファイル", "*.png *.jpg *.jpeg *.bmp *.tiff *.gif"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("All files", "*.*")
+            ],
+            initialdir=self.output_folder.get()
+        )
+
+        if not image_paths:
+            return
+
+        # 確認
+        engine_name = "manga-ocr（高精度）" if engine == 'manga_ocr' else "Tesseract"
+        direction_name = self._direction_display.get()
+        result = messagebox.askyesno(
+            "確認",
+            f"選択した画像にOCR処理を実行します。\n\n"
+            f"ファイル数: {len(image_paths)}枚\n"
+            f"エンジン: {engine_name}\n"
+            f"本の種類: {direction_name}\n\n"
+            f"処理を開始しますか？"
+        )
+
+        if not result:
+            return
+
+        # ボタン無効化
+        self.pdf_ocr_btn.config(state='disabled')
+        self.image_ocr_btn.config(state='disabled')
+        self.pdf_ocr_status.config(text="処理中...", foreground="blue")
+
+        def do_ocr():
+            try:
+                ocr = self._create_ocr_processor()
+
+                def progress_callback(current, total, status):
+                    self.root.after(0, lambda: self.pdf_ocr_status.config(text=f"{current}/{total}枚"))
+
+                results = ocr.process_images(list(image_paths), progress_callback=progress_callback)
+
+                # 出力ファイルパスを決定
+                first_image = image_paths[0]
+                output_dir = os.path.dirname(first_image)
+                output_name = os.path.splitext(os.path.basename(first_image))[0]
+                if len(image_paths) > 1:
+                    output_name += f"_他{len(image_paths)-1}枚"
+                output_path = os.path.join(output_dir, f"{output_name}_ocr.txt")
+
+                ocr.save_ocr_results(results, output_path)
+
+                def on_complete():
+                    self.pdf_ocr_btn.config(state='normal')
+                    self.image_ocr_btn.config(state='normal')
+                    self.pdf_ocr_status.config(text="完了!", foreground="green")
+                    self._log(f"画像OCR完了: {output_path}")
+                    messagebox.showinfo("完了", f"OCR処理が完了しました。\n\n出力ファイル:\n{output_path}")
+
+                self.root.after(0, on_complete)
+
+            except Exception as e:
+                def on_error():
+                    self.pdf_ocr_btn.config(state='normal')
+                    self.image_ocr_btn.config(state='normal')
+                    self.pdf_ocr_status.config(text="エラー", foreground="red")
+                    self._log(f"画像OCRエラー: {str(e)}")
                     messagebox.showerror("エラー", f"OCR処理中にエラーが発生しました:\n{str(e)}")
 
                 self.root.after(0, on_error)
@@ -424,7 +929,6 @@ class MainWindow:
         import time
         from .capture import ScreenCapture
         from .pdf_generator import PDFGenerator
-        from .ocr_processor import OCRProcessor
         from .privacy_overlay import PrivacyOverlayController
 
         try:
@@ -551,10 +1055,12 @@ class MainWindow:
 
             # OCR処理（有効かつ利用可能な場合のみ）
             if self.enable_ocr.get():
-                ocr = OCRProcessor(self.ocr_language.get())
+                ocr = self._create_ocr_processor()
+
                 if ocr.is_available():
-                    self._thread_safe_status("OCR処理中...")
-                    self._thread_safe_log("OCR処理を開始します...")
+                    engine_name = ocr.get_engine_name()
+                    self._thread_safe_status(f"{engine_name}でOCR処理中...")
+                    self._thread_safe_log(f"{engine_name}でOCR処理を開始します...")
 
                     def ocr_progress(current, total, status):
                         self._thread_safe_status(f"OCR: {current}/{total}")
@@ -564,7 +1070,8 @@ class MainWindow:
                     ocr.save_ocr_results(ocr_results, text_path)
                     self._thread_safe_log(f"OCRテキスト保存完了: {text_path}")
                 else:
-                    self._thread_safe_log("Tesseractが見つからないため、OCR処理をスキップしました")
+                    engine_name = ocr.get_engine_name()
+                    self._thread_safe_log(f"{engine_name}が見つからないため、OCR処理をスキップしました")
 
             # 完了
             self._thread_safe_status("完了")
